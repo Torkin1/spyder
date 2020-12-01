@@ -1,6 +1,6 @@
 #! /usr/bin/python3
 
-import string
+from sys import exit
 from getpass import getpass
 from json import dump
 from random import randint
@@ -25,7 +25,7 @@ LOADING_TIME = 2
 WAIT_TIME_MAX = 20
 WAIT_TIME_MIN = 10
 MAX_ATTEMPTS = 3
-MAX_LOAD_MORE_COMMENTS_CLICKS = 1
+MAX_LOAD_MORE_COMMENTS_CLICKS = 10
 
 # constants used to locate comments in DOM
 CSS_ID_COOKIES_ACCEPT = "button.aOOlW:nth-child(1)"
@@ -106,29 +106,44 @@ def scrapeComments(driver, userScraped, postId):
     driver.get(BASE_URL_POST + postId)    
     
     # queries all comments 
-    sleep(LOADING_TIME)
-    i = 0
-    stopper = Stopper(MAX_ATTEMPTS)
-    while i < MAX_LOAD_MORE_COMMENTS_CLICKS:
-        try:
-            stopper.waitRandom(WAIT_TIME_MIN, WAIT_TIME_MAX)
-            driver.find_element_by_css_selector(".dCJp8").click()
-            i += 1
-            stopper = Stopper(MAX_ATTEMPTS)
-        except NoSuchElementException:
-             logging.warning("'load more comments' button not found, retrying ...")
-        except TimeOutException:
-            logging.warning("Maximum waiting time for 'load more comments' button to pop up has expired")
-            break
-        
-    # scrapes all comments
-    commentsOnScreen = driver.find_elements_by_class_name(CSS_CLASS_COMMENT)
-    for c in commentsOnScreen:
-        commentHolder = Comment()
-        commentHolder.author = c.find_element_by_class_name(CSS_CLASS_COMMENT_AUTHOR).text
-        commentHolder.text = c.find_elements_by_tag_name(TAG_COMMENT_TEXT)[1].text
-        logging.debug("author=" + commentHolder.author + ", text=" + commentHolder.text)
-        commentsScraped.append(commentHolder)
+    
+    try:
+        sleep(LOADING_TIME)
+        i = 0
+        lastIndex = 0
+        stopper = Stopper(MAX_ATTEMPTS)
+        while i < MAX_LOAD_MORE_COMMENTS_CLICKS:
+            try:
+                stopper.waitRandom(WAIT_TIME_MIN, WAIT_TIME_MAX)
+                driver.find_element_by_css_selector(".dCJp8").click()
+                i += 1
+                
+                commentsOnScreen = driver.find_elements_by_class_name(CSS_CLASS_COMMENT)
+                while lastIndex < len(commentsOnScreen) - 1:
+                    commentHolder = Comment()
+                    commentHolder.author = commentsOnScreen[lastIndex].find_element_by_class_name(CSS_CLASS_COMMENT_AUTHOR).text
+                    commentHolder.text = commentsOnScreen[lastIndex].find_elements_by_tag_name(TAG_COMMENT_TEXT)[1].text
+                    logging.debug("author=" + commentHolder.author + ", text=" + commentHolder.text)
+                    commentsScraped.append(commentHolder)
+                    lastIndex += 1
+
+                stopper = Stopper(MAX_ATTEMPTS)
+            except NoSuchElementException as e:
+                logging.warning("'load more comments' button not found, retrying ...")
+            except TimeOutException as e:
+                logging.warning("Maximum waiting time for 'load more comments' button to pop up has expired")
+                break
+            
+        # scrapes all comments
+        commentsOnScreen = driver.find_elements_by_class_name(CSS_CLASS_COMMENT)
+        for c in commentsOnScreen:
+            commentHolder = Comment()
+            commentHolder.author = c.find_element_by_class_name(CSS_CLASS_COMMENT_AUTHOR).text
+            commentHolder.text = c.find_elements_by_tag_name(TAG_COMMENT_TEXT)[1].text
+            logging.debug("author=" + commentHolder.author + ", text=" + commentHolder.text)
+            commentsScraped.append(commentHolder)
+    except BaseException as e:
+        logging.error("Something went wrong while scraping comments, exiting ...")
 
     logging.info(f"Succesfully scraped {len(commentsScraped)} comments")
     
@@ -136,13 +151,15 @@ def scrapeComments(driver, userScraped, postId):
     with open(OUTPUT_DIR + "/comments_" + postId + ".json", 'w') as comments, open(OUTPUT_DIR + "/authors_" + postId + ".txt", 'w') as authors:
         
         # If author is the OP, skip this comment
-        for c in commentsScraped:
-            if userScraped not in c.author:
+        i = 0
+        while (i < len(commentsScraped)):
+            if userScraped not in commentsScraped[i].author:
         
                 # Txt file with one author per line
-                authors.write(c.author + "\n")
+                authors.write(commentsScraped[i].author + "\n")
+                i += 1
             else:
-                commentsScraped.remove(c)
+                commentsScraped.pop(i)
         # Json file with all Comment objects
         dump([c.__dict__ for c in commentsScraped], comments, indent=1)          
     
@@ -151,14 +168,19 @@ def scrapeComments(driver, userScraped, postId):
 
 
 if __name__ == '__main__':
-    logging.getLogger().setLevel("INFO")
-    parser = ArgumentParser(description="scrapes instagram post comments ")
-    parser.add_argument("userScraper", type=str, nargs='?')
-    parser.add_argument("userScraped", type=str, nargs='?')
-    parser.add_argument("postId", type=str, nargs='?')
+    try:
+        logging.getLogger().setLevel("INFO")
+        parser = ArgumentParser(description="scrapes instagram post comments ")
+        parser.add_argument("userScraper", type=str, nargs='?')
+        parser.add_argument("userScraped", type=str, nargs='?')
+        parser.add_argument("postId", type=str, nargs='?')
 
-    args = parser.parse_args()
+        args = parser.parse_args()
 
-    with webdriver.Firefox(executable_path=GECKODRIVER_PATH) as driver:
-        logIn(driver, args.userScraper)
-        scrapeComments(driver, args.userScraped, args.postId)
+        with webdriver.Firefox(executable_path=GECKODRIVER_PATH) as driver:
+            logIn(driver, args.userScraper)
+            scrapeComments(driver, args.userScraped, args.postId)
+
+    except KeyboardInterrupt as e:
+        logging.info("Exiting ...")
+        exit()
